@@ -1,62 +1,75 @@
 const db = require("./db");
 const { exec } = require("child_process");
+let shouldStop = false;
 
 function getConfig(key, defaultValue) {
   const row = db.prepare("SELECT value FROM config WHERE key = ?").get(key);
   return row ? parseInt(row.value) : defaultValue;
 }
 
-// Worker loop to pick up jobs and process them
+function requestShutdown() {
+  shouldStop = true;
+}
+
 async function workerLoop(workerId) {
-  while (true) {
-    // Find a pending job and lock it for processing
+  process.on("SIGINT", requestShutdown); // Graceful exit on Ctrl+C
+  process.on("SIGTERM", requestShutdown);
+  while (!shouldStop) {
+    // Atomically claim a pending job
     const job = db
-      .prepare("SELECT * FROM jobs WHERE state = ? LIMIT 1")
-      .get("pending");
+      .prepare(
+        `
+      SELECT * FROM jobs 
+      WHERE state = 'pending' 
+      LIMIT 1
+    `
+      )
+      .get();
     if (!job) {
-      await new Promise((r) => setTimeout(r, 1000)); // Wait before trying again
+      await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
-    // Lock (mark as processing)
-    db.prepare("UPDATE jobs SET state = ?, updated_at = ? WHERE id = ?").run(
-      "processing",
-      new Date().toISOString(),
-      job.id
-    );
 
-    // Execute command
+    // Attempt to lock (atomic state change)
+    const res = db
+      .prepare(
+        `
+      UPDATE jobs SET state = 'processing', updated_at = ?
+      WHERE id = ? AND state = 'pending'
+    `
+      )
+      .run(new Date().toISOString(), job.id);
+    if (res.changes === 0) continue; // Already claimed
+
+    // Execute job
     console.log(`[Worker ${workerId}] Executing: ${job.command}`);
-    exec(job.command, (error, stdout, stderr) => {
-      let state,
-        attempts = job.attempts + 1;
+    exec(job.command, async (error, stdout, stderr) => {
+      let nextState;
+      let attempts = job.attempts + 1;
       if (!error) {
-        state = "completed";
+        nextState = "completed";
         console.log(stdout);
       } else {
-        // Retry logic
-        const max_retries = job.max_retries;
-        if (attempts > max_retries) {
-          state = "dead";
-          console.error(`[Worker ${workerId}] Job ${job.id} moved to DLQ.`);
-        } else {
-          state = "failed";
-          // Exponential backoff
+        nextState = attempts > job.max_retries ? "dead" : "failed";
+        if (nextState === "failed") {
           const base = getConfig("backoff_base", 2);
           const delay = Math.pow(base, attempts);
           setTimeout(() => {
             db.prepare(
-              "UPDATE jobs SET state = ?, attempts = ?, updated_at = ? WHERE id = ?"
-            ).run("pending", attempts, new Date().toISOString(), job.id);
+              `UPDATE jobs SET state = 'pending', attempts = ?, updated_at = ? WHERE id = ?`
+            ).run(attempts, new Date().toISOString(), job.id);
           }, delay * 1000);
         }
       }
       db.prepare(
-        "UPDATE jobs SET state = ?, attempts = ?, updated_at = ? WHERE id = ?"
-      ).run(state, attempts, new Date().toISOString(), job.id);
+        `UPDATE jobs SET state = ?, attempts = ?, updated_at = ? WHERE id = ?`
+      ).run(nextState, attempts, new Date().toISOString(), job.id);
     });
-    // Wait for current job to finish before proceeding
-    await new Promise((r) => setTimeout(r, 2000));
+    // Wait a bit before looking for another job
+    await new Promise((r) => setTimeout(r, 1000));
   }
+  console.log(`[Worker ${workerId}] Shutting down gracefully.`);
 }
 
 module.exports = workerLoop;
+module.exports.requestShutdown = requestShutdown;
