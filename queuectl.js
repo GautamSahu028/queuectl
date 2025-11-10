@@ -83,4 +83,56 @@ program
     console.log(`Started ${count} worker(s).`);
   });
 
+program
+  .command("dlq list")
+  .description("List jobs in Dead Letter Queue")
+  .action(() => {
+    const dlqJobs = db.prepare(`SELECT * FROM jobs WHERE state = 'dead'`).all();
+    if (dlqJobs.length === 0) {
+      console.log("No jobs in DLQ.");
+    } else {
+      console.table(dlqJobs);
+    }
+  });
+
+program
+  .command("dlq retry <jobId>")
+  .description("Retry a DLQ job by moving it to pending")
+  .action((jobId) => {
+    const job = db
+      .prepare(`SELECT * FROM jobs WHERE id = ? AND state = 'dead'`)
+      .get(jobId);
+    if (!job) {
+      console.error("Job not found in DLQ.");
+      process.exit(1);
+    }
+    db.prepare(
+      `UPDATE jobs SET state = 'pending', attempts = 0, updated_at = ? WHERE id = ?`
+    ).run(new Date().toISOString(), jobId);
+    console.log(`Retried DLQ job: ${jobId}`);
+  });
+
+program
+  .command("config set <key> <value>")
+  .description("Set configuration value")
+  .action((key, value) => {
+    db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`).run(
+      key,
+      value
+    );
+    console.log(`Config set: ${key} = ${value}`);
+  });
+
+program
+  .command("config get <key>")
+  .description("Get configuration value")
+  .action((key) => {
+    const row = db.prepare(`SELECT value FROM config WHERE key = ?`).get(key);
+    if (!row) {
+      console.log(`${key} not set`);
+    } else {
+      console.log(`${key} = ${row.value}`);
+    }
+  });
+
 program.parse(process.argv);
