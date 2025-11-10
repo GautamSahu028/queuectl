@@ -5,7 +5,17 @@ const program = new Command();
 
 program
   .command("enqueue <jobJson>")
-  .description("Add a new job to the queue")
+  .description(
+    "Add a new job to the queue. Job must be a JSON string with id and command."
+  )
+  .addHelpText(
+    "after",
+    `
+Examples:
+  queuectl enqueue '{"id":"job1","command":"echo Hello World"}'
+  queuectl enqueue '{"id":"job2","command":"sleep 2"}'
+`
+  )
   .action((jobJson) => {
     let jobData;
     try {
@@ -18,7 +28,6 @@ program
       process.exit(1);
     }
 
-    // Use configured max_retries if job didn't explicitly set it
     const cfgRow = db
       .prepare(`SELECT value FROM config WHERE key = 'max_retries'`)
       .get();
@@ -27,7 +36,6 @@ program
         const cfgVal = parseInt(cfgRow.value, 10);
         if (!Number.isNaN(cfgVal)) jobData.max_retries = cfgVal;
       }
-      // If still undefined, Job constructor will set its default (3)
     }
 
     const job = new Job(jobData);
@@ -55,8 +63,19 @@ program
 
 program
   .command("list")
-  .option("--state <state>", "Filter jobs by state")
-  .description("List jobs by state")
+  .option(
+    "--state <state>",
+    "Filter jobs by state (pending|processing|completed|failed|dead)"
+  )
+  .description("List jobs filtered by their state.")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  queuectl list --state pending
+  queuectl list
+`
+  )
   .action((opts) => {
     const { state } = opts;
     const whereClause = state ? "WHERE state = ?" : "";
@@ -67,7 +86,14 @@ program
 
 program
   .command("status")
-  .description("Show summary of job states and active workers")
+  .description("Show a summary of job states and active workers.")
+  .addHelpText(
+    "after",
+    `
+Usage:
+  queuectl status
+`
+  )
   .action(() => {
     const states = ["pending", "processing", "completed", "failed", "dead"];
     const summary = {};
@@ -77,18 +103,24 @@ program
         .get(state).count;
       summary[state] = count;
     });
-    // Placeholder for future worker count if implemented
-    summary.workers = 0;
+    summary.workers = 0; // Placeholder
     console.table([summary]);
   });
 
-// Group worker commands under a single 'worker' command with subcommands
-const worker = program.command("worker").description("Manage workers");
+const worker = program.command("worker").description("Manage worker processes");
 
 worker
   .command("start")
-  .option("--count <count>", "Number of workers", "1")
-  .description("Start worker processes")
+  .option("--count <count>", "Number of workers to start", "1")
+  .description("Start one or more worker processes that process jobs.")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  queuectl worker start
+  queuectl worker start --count 3
+`
+  )
   .action((opts) => {
     const { workerLoop } = require("./worker");
     const count = parseInt(opts.count);
@@ -100,16 +132,31 @@ worker
 
 worker
   .command("stop")
-  .description("Stop running workers gracefully (not implemented yet)")
+  .description("Stop all running workers gracefully.")
+  .addHelpText(
+    "after",
+    `
+Note: Graceful stop implementation is pending.
+`
+  )
   .action(() => {
     console.log("Worker stop functionality not implemented yet.");
   });
 
-const dlq = program.command("dlq").description("Manage Dead Letter Queue");
+const dlq = program
+  .command("dlq")
+  .description("Manage Dead Letter Queue (DLQ)");
 
 dlq
   .command("list")
-  .description("List jobs in Dead Letter Queue")
+  .description("List jobs currently in the Dead Letter Queue.")
+  .addHelpText(
+    "after",
+    `
+Usage:
+  queuectl dlq list
+`
+  )
   .action(() => {
     const dlqJobs = db.prepare(`SELECT * FROM jobs WHERE state = 'dead'`).all();
     if (dlqJobs.length === 0) {
@@ -121,7 +168,14 @@ dlq
 
 dlq
   .command("retry <jobId>")
-  .description("Retry a DLQ job by moving it to pending")
+  .description("Retry a job from DLQ by moving it back to pending.")
+  .addHelpText(
+    "after",
+    `
+Example:
+  queuectl dlq retry job1
+`
+  )
   .action((jobId) => {
     const job = db
       .prepare(`SELECT * FROM jobs WHERE id = ? AND state = 'dead'`)
@@ -136,12 +190,18 @@ dlq
     console.log(`Retried DLQ job: ${jobId}`);
   });
 
-// ---- config parent command with subcommands (FIX) ----
 const config = program.command("config").description("Manage configuration");
 
 config
   .command("set <key> <value>")
-  .description("Set configuration value")
+  .description("Set a configuration value by key.")
+  .addHelpText(
+    "after",
+    `
+Example:
+  queuectl config set max_retries 3
+`
+  )
   .action((key, value) => {
     db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`).run(
       key,
@@ -152,7 +212,14 @@ config
 
 config
   .command("get <key>")
-  .description("Get configuration value")
+  .description("Get the current value of a configuration key.")
+  .addHelpText(
+    "after",
+    `
+Example:
+  queuectl config get max_retries
+`
+  )
   .action((key) => {
     const row = db.prepare(`SELECT value FROM config WHERE key = ?`).get(key);
     if (!row) {
@@ -162,7 +229,6 @@ config
     }
   });
 
-// Only parse args when executed directly (safer for requiring the file)
 if (require.main === module) {
   program.parse(process.argv);
 }
