@@ -40,4 +40,33 @@ program
     }
   });
 
+program
+  .command("list")
+  .option("--state <state>", "Filter jobs by state")
+  .description("List jobs by state")
+  .action((opts) => {
+    const { state } = opts;
+    const whereClause = state ? "WHERE state = ?" : "";
+    const stmt = db.prepare(`SELECT * FROM jobs ${whereClause}`);
+    const jobs = state ? stmt.all(state) : stmt.all();
+    console.table(jobs);
+  });
+
+program
+  .command("status")
+  .description("Show summary of job states and active workers")
+  .action(() => {
+    const states = ["pending", "processing", "completed", "failed", "dead"];
+    const summary = {};
+    states.forEach((state) => {
+      const count = db
+        .prepare("SELECT COUNT(*) as count FROM jobs WHERE state = ?")
+        .get(state).count;
+      summary[state] = count;
+    });
+    // Placeholder for workers
+    summary.workers = 0;
+    console.table([summary]);
+  });
+
 program.parse(process.argv);
