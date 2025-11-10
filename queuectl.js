@@ -69,4 +69,18 @@ program
     console.table([summary]);
   });
 
+program
+  .command("worker")
+  .option("start", "Start worker processes")
+  .option("--count <count>", "Number of workers", 1)
+  .description("Start one or more workers")
+  .action((opts) => {
+    const workerLoop = require("./worker");
+    const count = parseInt(opts.count) || 1;
+    for (let i = 0; i < count; i++) {
+      workerLoop(i + 1);
+    }
+    console.log(`Started ${count} worker(s).`);
+  });
+
 program.parse(process.argv);
