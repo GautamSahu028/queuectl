@@ -17,12 +17,25 @@ program
       console.error("Invalid job JSON:", err.message);
       process.exit(1);
     }
+
+    // Use configured max_retries if job didn't explicitly set it
+    const cfgRow = db
+      .prepare(`SELECT value FROM config WHERE key = 'max_retries'`)
+      .get();
+    if (jobData.max_retries === undefined || jobData.max_retries === null) {
+      if (cfgRow && cfgRow.value) {
+        const cfgVal = parseInt(cfgRow.value, 10);
+        if (!Number.isNaN(cfgVal)) jobData.max_retries = cfgVal;
+      }
+      // If still undefined, Job constructor will set its default (3)
+    }
+
     const job = new Job(jobData);
 
-    // Insert job into DB
-    const stmt =
-      db.prepare(`INSERT INTO jobs (id, command, state, attempts, max_retries, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    const stmt = db.prepare(
+      `INSERT INTO jobs (id, command, state, attempts, max_retries, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
     try {
       stmt.run(
         job.id,
@@ -64,27 +77,38 @@ program
         .get(state).count;
       summary[state] = count;
     });
-    // Placeholder for workers
+    // Placeholder for future worker count if implemented
     summary.workers = 0;
     console.table([summary]);
   });
 
-program
-  .command("worker")
-  .option("start", "Start worker processes")
-  .option("--count <count>", "Number of workers", 1)
-  .description("Start one or more workers")
+// Group worker commands under a single 'worker' command with subcommands
+const worker = program.command("worker").description("Manage workers");
+
+worker
+  .command("start")
+  .option("--count <count>", "Number of workers", "1")
+  .description("Start worker processes")
   .action((opts) => {
-    const workerLoop = require("./worker");
-    const count = parseInt(opts.count) || 1;
+    const { workerLoop } = require("./worker");
+    const count = parseInt(opts.count);
     for (let i = 0; i < count; i++) {
       workerLoop(i + 1);
     }
     console.log(`Started ${count} worker(s).`);
   });
 
-program
-  .command("dlq list")
+worker
+  .command("stop")
+  .description("Stop running workers gracefully (not implemented yet)")
+  .action(() => {
+    console.log("Worker stop functionality not implemented yet.");
+  });
+
+const dlq = program.command("dlq").description("Manage Dead Letter Queue");
+
+dlq
+  .command("list")
   .description("List jobs in Dead Letter Queue")
   .action(() => {
     const dlqJobs = db.prepare(`SELECT * FROM jobs WHERE state = 'dead'`).all();
@@ -95,8 +119,8 @@ program
     }
   });
 
-program
-  .command("dlq retry <jobId>")
+dlq
+  .command("retry <jobId>")
   .description("Retry a DLQ job by moving it to pending")
   .action((jobId) => {
     const job = db
@@ -107,13 +131,16 @@ program
       process.exit(1);
     }
     db.prepare(
-      `UPDATE jobs SET state = 'pending', attempts = 0, updated_at = ? WHERE id = ?`
+      `UPDATE jobs SET state = 'pending', attempts = 0, updated_at = ?, available_at = NULL WHERE id = ?`
     ).run(new Date().toISOString(), jobId);
     console.log(`Retried DLQ job: ${jobId}`);
   });
 
-program
-  .command("config set <key> <value>")
+// ---- config parent command with subcommands (FIX) ----
+const config = program.command("config").description("Manage configuration");
+
+config
+  .command("set <key> <value>")
   .description("Set configuration value")
   .action((key, value) => {
     db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`).run(
@@ -123,8 +150,8 @@ program
     console.log(`Config set: ${key} = ${value}`);
   });
 
-program
-  .command("config get <key>")
+config
+  .command("get <key>")
   .description("Get configuration value")
   .action((key) => {
     const row = db.prepare(`SELECT value FROM config WHERE key = ?`).get(key);
@@ -135,4 +162,9 @@ program
     }
   });
 
-program.parse(process.argv);
+// Only parse args when executed directly (safer for requiring the file)
+if (require.main === module) {
+  program.parse(process.argv);
+}
+
+module.exports = { program };
