@@ -475,14 +475,6 @@ Persistence test complete.
 
 ---
 
-## 👤 Author
-
-**Gautam Kumar**  
-Backend Developer Internship Submission  
-NIT Raipur
-
----
-
 ## 📚 References
 
 ### Documentation & Libraries
@@ -518,3 +510,11 @@ NIT Raipur
 11. SQLite Consortium. (n.d.). _SQLite Documentation_. SQLite. Retrieved November 11, 2025, from https://www.sqlite.org/docs.html
 
 12. Hipp, D. R. (n.d.). _Appropriate Uses For SQLite_. SQLite. Retrieved November 11, 2025, from https://www.sqlite.org/whentouse.html
+
+---
+
+## 👤 Author
+
+**Gautam Kumar**  
+Backend Developer Internship Submission  
+NIT Raipur
